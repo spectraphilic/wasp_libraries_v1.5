@@ -124,18 +124,7 @@ SDI-12.org, official site of the SDI-12 Support Group.
 
 #include "SDI12.h"						// 0.1 header file for this library
 
-// Macros to create a secondardy streaming dialog for debugging
-#define ENABLE_CONFIG_DIAG 1
-static Stream * _diagStream;
-#if ENABLE_CONFIG_DIAG
-  #define myDiagPrint(...) do { if (_diagStream) _diagStream->print(__VA_ARGS__); } while (0)
-  #define myDiagPrintLn(...) do { if (_diagStream) _diagStream->println(__VA_ARGS__); } while (0)
-#else
-  #define myDiagPrint(...)
-  #define myDiagPrintLn(...)
-#endif
-
-#define _BUFFER_SIZE 64 				// 0.2 max RX buffer size
+#define _BUFFER_SIZE 64 				// 0.2 max RX buffer size		
 #define DISABLED 0						// 0.3 value for DISABLED state
 #define ENABLED 1						// 0.4 value for ENABLED state
 #define HOLDING 2 						// 0.5 value for DISABLED state
