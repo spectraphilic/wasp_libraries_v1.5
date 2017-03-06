@@ -4,6 +4,8 @@ Arduino library for SDI-12 communications to a wide variety of environmental
 sensors. This library provides a general software solution, without requiring
 any additional hardware.
 
+* Note to self: Start bit is spacing *
+
 ======================== Attribution & License =============================
 
 Copyright (C) 2013  Stroud Water Research Center
@@ -62,8 +64,8 @@ Physical Connections:			1 data line (0v - 5.5v)
 
 Baud Rate: 						1200 bits per second
 
-Data Frame Format:				10 bits per data frame
-								1 start bit
+Data Frame Format:				10 bits per data frame 		
+								1 start bit (spacing)
 								7 data bits (least significant bit first)
 								1 even parity bit
 								1 stop bit
@@ -145,6 +147,8 @@ int TIMEOUT = -9999;					// 0.9 value to return to indicate TIMEOUT
 SDI12 *SDI12::_activeObject = NULL;		// 0.10 pointer to active SDI12 object
 uint8_t _dataPin; 						// 0.11 reference to the data pin
 bool _bufferOverflow;					// 0.12 buffer overflow status
+#define POLLING 1						// 0.9 to poll or not to poll?
+
 
 /* =========== 1. Buffer Setup ============================================
 
@@ -173,6 +177,42 @@ buffer tail. (unsigned 8-bit integer, can map from 0-255)
 char _rxBuffer[_BUFFER_SIZE]; 	// 1.2 - buff for incoming
 uint8_t _rxBufferHead = 0;		// 1.3 - index of buff head
 uint8_t _rxBufferTail = 0;		// 1.4 - index of buff tail
+
+/*  This helper function outputs the number of microseconds since it was
+    first called.
+
+    This is a terrible attempt at replicating the Arduino micros()
+    function which the Waspmote does not have. The Waspmote v1.2
+    runs at 14.7456Mhz. Using a prescalar of CLK/8 into the timer
+    gives 0.5425 microseconds per tick. Every other tick gives 1.085 
+    microseconds. So to be more accurate this should be factored in, 
+    but I don't really care right now. Since the timer is only
+    16-bits, the function checks the timer's overflow flag and, if set,
+    adds ~32ms to the count. If this function is not called for longer 
+    than ~65ms, the returned count will be off. Also, eventually the 
+    value will roll over, this is not accounted for or flagged anywhere.
+
+    This function can be reset by stopping the timer elsewhere and then 
+    calling this function again.
+
+ */
+#ifndef Arduino_h
+unsigned long micros(){
+  static unsigned long value;
+  if ((TCCR4B & 7)){
+    value += (TCNT4 >> 1); //right shift by 1 gives ~1us resolution
+    TCNT4 = 0;
+    if (TIFR4 & 1) {    //overflow flag
+      TIFR4 = 0x1; //reset overflow flag
+      value += 32768;
+    }
+  } else {
+    value = 0;
+  }
+  TCCR4B |= (1 << CS41); // prescalar 8 gives ~0.5us resolution
+  return value;
+}
+#endif
 
 /* =========== 2. Data Line States ===============================
 
@@ -213,6 +253,7 @@ HOLDING --> TRANSMITTING --> LISTENING --> done reading, forceHold(); HOLDING
 internally. It uses #define values of HOLDING, TRANSMITTING, LISTENING,
 and DISABLED to determine which state should be set. The grid above
 defines the settings applied in changing to each state.
+
 
 2.2 - A public function which forces the line into a "holding" state.
 This is generally unneeded, but for deployments where interference is an
@@ -387,34 +428,15 @@ Therefore if we evaluate to TRUE, we should tidy up:
 
 */
 
-const char *SDI12::getStateName(uint8_t state)
-{
-    const char * retval = "UNKNOWN";
-    if (state == HOLDING) {
-        retval = "HOLDING";
-    }
-    else if (state == TRANSMITTING) {
-        retval = "TRANSMITTING";
-    }
-    else if (state == LISTENING) {
-        retval = "LISTENING";
-    }
-    else if (state == ENABLED) {
-        retval = "ENABLED";
-    }
-    else if (state == DISABLED) {
-        retval = "DISABLED";
-    }
-    return retval;
-}
-// 2.1 - sets the state of the SDI-12 object.
+// 2.1 - sets the state of the SDI-12 object. 
 void SDI12::setState(uint8_t state){
-  myDiagPrintLn(String("setState - ") + getStateName(state));
   if(state == HOLDING){
     pinMode(_dataPin,OUTPUT);
     digitalWrite(_dataPin,LOW);
+#if (POLLING == 0)
     *digitalPinToPCMSK(_dataPin) &= ~(1<<digitalPinToPCMSKbit(_dataPin));
-    return;
+#endif
+    return; 
   }
   if(state == TRANSMITTING){
     pinMode(_dataPin,OUTPUT);
@@ -423,17 +445,24 @@ void SDI12::setState(uint8_t state){
   }
   if(state == LISTENING) {
     digitalWrite(_dataPin,LOW);
-    pinMode(_dataPin,INPUT);
+    pinMode(_dataPin,INPUT); 
+    /* Note for Waspmote: interrupts are no longer used for SDI12 but
+    other interrupts can still be generated and may mess up the behavior
+    of this polling function */
     interrupts();				// supplied by Arduino.h, same as sei()
+#if (POLLING == 0)
 	*digitalPinToPCICR(_dataPin) |= (1<<digitalPinToPCICRbit(_dataPin));
     *digitalPinToPCMSK(_dataPin) |= (1<<digitalPinToPCMSKbit(_dataPin));
-  } else { 						// implies state==DISABLED
-  	digitalWrite(_dataPin,LOW);
+#endif
+  } else { 						// implies state==DISABLED 
+  	digitalWrite(_dataPin,LOW); 
   	pinMode(_dataPin,INPUT);
+#if (POLLING == 0)
   	*digitalPinToPCMSK(_dataPin) &= ~(1<<digitalPinToPCMSKbit(_dataPin));
   	if(!*digitalPinToPCMSK(_dataPin)){
   		*digitalPinToPCICR(_dataPin) &= ~(1<<digitalPinToPCICRbit(_dataPin));
   	}
+#endif
   }
 }
 
@@ -599,11 +628,21 @@ void SDI12::sendCommand(String cmd)
 	writeChar(cmd[i]); 						// write each characters
   }
   setState(LISTENING); 						// listen for reply
+
+  //New for waspmote
+  if(POLLING){
+	listen(16700);  // 16.7ms is the max time for a response to be received 
+					//	 after a command is sent	
+  }
 }
 
 //  4.4 - this function sets up for a response, then sends out the characters
 //		  of String resp, one by one (for slave)
 void SDI12::sendResponse(String resp)
+/* Here is new polling code for waspmote
+	This command will poll the bus for data coming back rather than use interrupts
+*/
+int SDI12::listen(unsigned long listenTimeout) //time to wait in microseconds
 {
   myDiagPrintLn(String("sendResponse - resp ") + resp);
   setState(TRANSMITTING);					// 8.33 ms marking before response
@@ -611,8 +650,29 @@ void SDI12::sendResponse(String resp)
   delayMicroseconds(8330);
   for (int unsigned i = 0; i < resp.length(); i++){
 	writeChar(resp[i]); 						// write each characters
+  setState(LISTENING);
+  // Wait up to listenTimeout (in microseconds) for response to arrive
+  unsigned long timestamp = micros();
+  for (unsigned long i = timestamp; (i - timestamp) <= listenTimeout; i = micros() )
+  {
+    if (!receiveChar()){
+      break;
+    }
   }
   setState(LISTENING); 						// return to listening state
+
+  timestamp = micros();
+  // Each additional char will come within 1.66ms of the last one
+  if (available() > 0) {
+    for (unsigned long i = timestamp; (i - timestamp) <= 1700; i = micros())
+    {
+      if (!receiveChar()){
+        timestamp = micros();   //Reset for next char
+      }
+    }
+    return 0; // Success (relatively) if we get here
+  }
+  return -1; // Failure if we get to this step
 }
 
 /* ============= 5. Reading from the SDI-12 object.  ===================
@@ -869,10 +929,15 @@ void SDI12::receiveChar()
       _rxBuffer[_rxBufferTail] = newChar;
       _rxBufferTail = (_rxBufferTail + 1) % _BUFFER_SIZE;
     }
+    return 0;
   }
+  return -1;
 }
 
 //7.3
+//6.3 - If not polling set interrupts
+#if POLLING == 0
+
 #if defined(PCINT0_vect)
 ISR(PCINT0_vect){ SDI12::handleInterrupt(); }
 #endif
@@ -888,3 +953,6 @@ ISR(PCINT2_vect){ SDI12::handleInterrupt(); }
 #if defined(PCINT3_vect)
 ISR(PCINT3_vect){ SDI12::handleInterrupt(); }
 #endif
+
+#endif
+

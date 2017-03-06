@@ -4,6 +4,8 @@ Arduino library for SDI-12 communications to a wide variety of environmental
 sensors. This library provides a general software solution, without requiring 
 any additional hardware.
 
+* Note to self: Start bit is spacing *
+
 ======================== Attribution & License =============================
 
 Copyright (C) 2013  Stroud Water Research Center
@@ -63,7 +65,7 @@ Physical Connections:			1 data line (0v - 5.5v)
 Baud Rate: 						1200 bits per second
 
 Data Frame Format:				10 bits per data frame 		
-								1 start bit
+								1 start bit (spacing)
 								7 data bits (least significant bit first)
 								1 even parity bit
 								1 stop bit	
@@ -110,17 +112,14 @@ SDI-12.org, official site of the SDI-12 Support Group.
 0.8 - defines value for the spacing of bits. 
 	1200 bits per second implies 833 microseconds per bit.
 	830 seems to be a reliable value given the overhead of the call.
-0.9	- holds a custom value that indicates a
-    TIMEOUT has occurred from parseInt() or parseFloat(). This should not be set to 
-    a possible data value. 
 
-0.10 - a static pointer to the active object. See section 6. 
-0.11 - a reference to the data pin, used throughout the library
-0.12 - holds the buffer overflow status
+0.9 - a static pointer to the active object. See section 6. 
+0.10 - a reference to the data pin, used throughout the library
+0.11 - holds the buffer overflow status
 
 */
 
-#include <SDI12.h>						// 0.1 header file for this library
+#include "SDI12.h"						// 0.1 header file for this library
 
 #define _BUFFER_SIZE 64 				// 0.2 max RX buffer size		
 #define DISABLED 0						// 0.3 value for DISABLED state
@@ -129,11 +128,12 @@ SDI-12.org, official site of the SDI-12 Support Group.
 #define TRANSMITTING 3					// 0.6 value for TRANSMITTING state
 #define LISTENING 4						// 0.7 value for LISTENING state
 #define SPACING 830						// 0.8 bit timing in microseconds
-int TIMEOUT = -9999;					// 0.9 value to return to indicate TIMEOUT
 
-SDI12 *SDI12::_activeObject = NULL;		// 0.10 pointer to active SDI12 object
-uint8_t _dataPin; 						// 0.11 reference to the data pin
-bool _bufferOverflow;					// 0.12 buffer overflow status
+#define POLLING 1						// 0.9 to poll or not to poll?
+
+SDI12 *SDI12::_activeObject = NULL;		// 0.9 pointer to active SDI12 object
+uint8_t _dataPin; 						// 0.10 reference to the data pin
+bool _bufferOverflow;					// 0.11 buffer overflow status
 
 /* =========== 1. Buffer Setup ============================================
 
@@ -162,6 +162,42 @@ buffer tail. (unsigned 8-bit integer, can map from 0-255)
 char _rxBuffer[_BUFFER_SIZE]; 	// 1.2 - buff for incoming
 uint8_t _rxBufferHead = 0;		// 1.3 - index of buff head
 uint8_t _rxBufferTail = 0;		// 1.4 - index of buff tail
+
+/*  This helper function outputs the number of microseconds since it was
+    first called.
+
+    This is a terrible attempt at replicating the Arduino micros()
+    function which the Waspmote does not have. The Waspmote v1.2
+    runs at 14.7456Mhz. Using a prescalar of CLK/8 into the timer
+    gives 0.5425 microseconds per tick. Every other tick gives 1.085 
+    microseconds. So to be more accurate this should be factored in, 
+    but I don't really care right now. Since the timer is only
+    16-bits, the function checks the timer's overflow flag and, if set,
+    adds ~32ms to the count. If this function is not called for longer 
+    than ~65ms, the returned count will be off. Also, eventually the 
+    value will roll over, this is not accounted for or flagged anywhere.
+
+    This function can be reset by stopping the timer elsewhere and then 
+    calling this function again.
+
+ */
+#ifndef Arduino_h
+unsigned long micros(){
+  static unsigned long value;
+  if ((TCCR4B & 7)){
+    value += (TCNT4 >> 1); //right shift by 1 gives ~1us resolution
+    TCNT4 = 0;
+    if (TIFR4 & 1) {    //overflow flag
+      TIFR4 = 0x1; //reset overflow flag
+      value += 32768;
+    }
+  } else {
+    value = 0;
+  }
+  TCCR4B |= (1 << CS41); // prescalar 8 gives ~0.5us resolution
+  return value;
+}
+#endif
 
 /* =========== 2. Data Line States ===============================
 
@@ -378,7 +414,9 @@ void SDI12::setState(uint8_t state){
   if(state == HOLDING){
     pinMode(_dataPin,OUTPUT);
     digitalWrite(_dataPin,LOW);
+#if (POLLING == 0)
     *digitalPinToPCMSK(_dataPin) &= ~(1<<digitalPinToPCMSKbit(_dataPin));
+#endif
     return; 
   }
   if(state == TRANSMITTING){
@@ -389,16 +427,23 @@ void SDI12::setState(uint8_t state){
   if(state == LISTENING) {
     digitalWrite(_dataPin,LOW);
     pinMode(_dataPin,INPUT); 
+    /* Note for Waspmote: interrupts are no longer used for SDI12 but
+    other interrupts can still be generated and may mess up the behavior
+    of this polling function */
     interrupts();				// supplied by Arduino.h, same as sei()
+#if (POLLING == 0)
 	*digitalPinToPCICR(_dataPin) |= (1<<digitalPinToPCICRbit(_dataPin));
     *digitalPinToPCMSK(_dataPin) |= (1<<digitalPinToPCMSKbit(_dataPin));
+#endif
   } else { 						// implies state==DISABLED 
   	digitalWrite(_dataPin,LOW); 
   	pinMode(_dataPin,INPUT);
+#if (POLLING == 0)
   	*digitalPinToPCMSK(_dataPin) &= ~(1<<digitalPinToPCMSKbit(_dataPin));
   	if(!*digitalPinToPCMSK(_dataPin)){
   		*digitalPinToPCICR(_dataPin) &= ~(1<<digitalPinToPCICRbit(_dataPin));
   	}
+#endif
   }
 }
 
@@ -433,7 +478,7 @@ destructor, as it will maintain the memory buffer.
 //	3.1	Constructor
 SDI12::SDI12(uint8_t dataPin){ _bufferOverflow = false; _dataPin = dataPin; }   
 
-//	3.2	Destructor
+//	3.2	Destrutor
 SDI12::~SDI12(){ setState(DISABLED); }
 
 //  3.3 Begin
@@ -543,12 +588,47 @@ void SDI12::writeChar(uint8_t out)
 }
 
 //	4.3	- this function sends out the characters of the String cmd, one by one
-void SDI12::sendCommand(String cmd){
+void SDI12::sendCommand(char* cmd){
   wakeSensors();							// wake up sensors
-  for (int i = 0; i < cmd.length(); i++){
+  for (int i = 0; i < strlen(cmd); i++){
 	writeChar(cmd[i]); 						// write each characters
   }	
   setState(LISTENING); 						// listen for reply
+
+  //New for waspmote
+  if(POLLING){
+	listen(16700);  // 16.7ms is the max time for a response to be received 
+					//	 after a command is sent	
+  }
+}
+
+/* Here is new polling code for waspmote
+	This command will poll the bus for data coming back rather than use interrupts
+*/
+int SDI12::listen(unsigned long listenTimeout) //time to wait in microseconds
+{
+  setState(LISTENING);
+  // Wait up to listenTimeout (in microseconds) for response to arrive
+  unsigned long timestamp = micros();
+  for (unsigned long i = timestamp; (i - timestamp) <= listenTimeout; i = micros() )
+  {
+    if (!receiveChar()){
+      break;
+    }
+  }
+
+  timestamp = micros();
+  // Each additional char will come within 1.66ms of the last one
+  if (available() > 0) {
+    for (unsigned long i = timestamp; (i - timestamp) <= 1700; i = micros())
+    {
+      if (!receiveChar()){
+        timestamp = micros();   //Reset for next char
+      }
+    }
+    return 0; // Success (relatively) if we get here
+  }
+  return -1; // Failure if we get to this step
 }
 
 
@@ -603,14 +683,6 @@ the character, meaning it can not be read from the buffer again. If you
 would rather see the character, but leave the index to head intact, you
 should use peek(); 
 
-5.5 - peekNextDigit() is called by the Stream class. It is overridden 
-here to allow for a custom TIMEOUT value. The default value for the 
-Stream class is to return 0. This makes distinguishing timeouts from 
-true zero readings impossible. Therefore the default value has been
-set to -9999 in section 0 of the code. It is a public variable and
-can be changed dynamically within a program by calling:
-	mySDI12.TIMEOUT = (int) newValue
-
 */
 
 // 5.1 - reveals the number of characters available in the buffer
@@ -645,18 +717,6 @@ int SDI12::read()
   return nextChar;									 	// return the char
 }
 
-// 5.5 - this function is called by the Stream class when parsing digits
-int SDI12::peekNextDigit()
-{
-  int c;
-  while (1) {
-    c = timedPeek();
-    if (c < 0) return TIMEOUT; // timeout
-    if (c == '-') return c;
-    if (c >= '0' && c <= '9') return c;
-    read(); // discard non-numeric
-  }
-}
 
 /* ============= 6. Using more than one SDI-12 object.  ===================
 
@@ -723,25 +783,25 @@ bool SDI12::setActive()
 bool SDI12::isActive() { return this == _activeObject; }
 
 
-/* ============== 7. Interrupt Service Routine  ===================
+/* ============== 6. Interrupt Service Routine  ===================
 
 We have received an interrupt signal, what should we do?
 
-7.1 - Passes off responsibility for the interrupt to the active object.
+6.1 - Passes off responsibility for the interrupt to the active object.
 
-7.2 - This function quickly reads a new character from the data line in
+6.2 - This function quickly reads a new character from the data line in
 to the buffer. It takes place over a series of key steps.
 
-+ 7.2.1 - Check for the start bit. If it is not there, interrupt may be
++ 6.2.1 - Check for the start bit. If it is not there, interrupt may be
 from interference or an interrupt we are not interested in, so return.
 
-+ 7.2.2 - Make space in memory for the new character "newChar".
++ 6.2.2 - Make space in memory for the new character "newChar".
 
-+ 7.2.3 - Wait half of a SPACING to help center on the next bit. It will
++ 6.2.3 - Wait half of a SPACING to help center on the next bit. It will
 not actually be centered, or even approximately so until
 delayMicroseconds(SPACING) is called again.
 
-+ 7.2.4 - For each of the 8 bits in the payload, read wether or not the
++ 6.2.4 - For each of the 8 bits in the payload, read wether or not the
 line state is HIGH or LOW. We use a moving mask here, as was previously
 demonstrated in the writeByte() function. 
 
@@ -758,27 +818,27 @@ masks following masks: 00000001
 Here we use an if / else structure that helps to balance the time it
 takes to either a HIGH vs a LOW, and helps maintain a constant timing.
 
-+ 7.2.5 - Skip the parity bit. There is no error checking.
++ 6.2.5 - Skip the parity bit. There is no error checking.
 
-+ 7.2.6 - Skip the stop bit.
++ 6.2.6 - Skip the stop bit.
 
-+ 7.2.7 - Check for an overflow. We do this by checking if advancing the
++ 6.2.7 - Check for an overflow. We do this by checking if advancing the
 tail would make it have the same index as the head (in a circular
 fashion).
 
-+ 7.2.8 - Save the byte into the buffer if there has not been an
++ 6.2.8 - Save the byte into the buffer if there has not been an
 overflow, and then advance the tail index.
 
-7.3 - Check if the various interrupt vectors are defined. If they are
+6.3 - Check if the various interrupt vectors are defined. If they are
 the ISR is instructed to call _handleInterrupt() when they trigger. */
 
-// 7.1 - Passes off responsibility for the interrupt to the active object. 
+// 6.1 - Passes off responsibility for the interrupt to the active object. 
 inline void SDI12::handleInterrupt(){
   if (_activeObject) _activeObject->receiveChar();
 }
 
-// 7.2 - Quickly reads a new character into the buffer. 
-void SDI12::receiveChar()
+// 6.2 - Quickly reads a new character into the buffer. 
+int SDI12::receiveChar()
 {
   if (digitalRead(_dataPin))				// 7.2.1 - Start bit?
   {
@@ -806,10 +866,14 @@ void SDI12::receiveChar()
       _rxBuffer[_rxBufferTail] = newChar; 
       _rxBufferTail = (_rxBufferTail + 1) % _BUFFER_SIZE;
     }
+    return 0;
   }
+  return -1;
 }
 
-//7.3
+//6.3 - If not polling set interrupts
+#if POLLING == 0
+
 #if defined(PCINT0_vect)
 ISR(PCINT0_vect){ SDI12::handleInterrupt(); }
 #endif
@@ -824,5 +888,7 @@ ISR(PCINT2_vect){ SDI12::handleInterrupt(); }
 
 #if defined(PCINT3_vect)
 ISR(PCINT3_vect){ SDI12::handleInterrupt(); }
+#endif
+
 #endif
 

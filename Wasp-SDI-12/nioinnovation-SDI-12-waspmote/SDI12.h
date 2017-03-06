@@ -43,35 +43,47 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 #include <avr/interrupt.h>      // interrupt handling
 #include <avr/parity.h>         // optimized parity bit handling
 #include <inttypes.h>			// integer types library
-#include <Arduino.h>            // Arduino core library
-#include <Stream.h>				// Arduino Stream library
+#include <WaspClasses.h>            // Waspmote core library
 
-class SDI12 : public Stream
+/*  Notes on interrupts:
+  The following pins are interrupt capable for the Atmel ATmega640/1280 family:
+    PB0-7 = PCINT0-PCINT7
+    PE0   = PCINT8             *This is USB RX on Waspmote, so not using it
+    PJ0-6 = PCINT9-PCINT15     *Not available on 1281
+    PK0-7 = PCINT16-PCINT23    *Not available on 1281
+
+  The Waspmote uses a 1281 uProcessor and utilizes all its interrupt pins 
+  for other things. Without the ability to generate a pin change interrupt
+  we have to modify this library to poll for a response.
+*/
+
+class SDI12
 {
-protected:
-  int peekNextDigit();			// override of Stream equivalent to allow custom TIMEOUT
 private:
   static SDI12 *_activeObject;	// static pointer to active SDI12 instance
   void setState(uint8_t state); // sets the state of the SDI12 objects
   void wakeSensors();			// used to wake up the SDI12 bus
   void writeChar(uint8_t out); 	// used to send a char out on the data line
-  void receiveChar();			// used by the ISR to grab a char from data line
+
+  /*  Modified for Waspmote: return value indicates whether char was seen  */
+  int receiveChar();			// used by the ISR to grab a char from data line
   
 public:
-  int TIMEOUT;
   SDI12(uint8_t dataPin);		// constructor
   ~SDI12();						// destructor
   void begin();					// enable SDI-12 object
   void end();					// disable SDI-12 object
   
   void forceHold(); 			// sets line state to HOLDING
-  void sendCommand(String cmd);	// sends the String cmd out on the data line
-    
+  void sendCommand(char* cmd);	// sends the string 'cmd' out on the data line
+
+  /* Added for Waspmote: polls for characters */
+  int listen(unsigned long listenTimeout); // returns 0 if chars received
+
   int available();			// returns the number of bytes available in buffer
   int peek();				// reveals next byte in buffer without consuming
   int read();				// returns next byte in the buffer (consumes)
   void flush();				// clears the buffer 
-  virtual size_t write(uint8_t byte){}; // dummy function required to inherit from Stream
 
   bool setActive(); 		// set this instance as the active SDI-12 instance
   bool isActive();			// check if this instance is active
