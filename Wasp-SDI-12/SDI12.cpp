@@ -724,15 +724,7 @@ setting the index for both head and tail back to zero.
 after incrementing the index of the buffer head. This action 'consumes'
 the character, meaning it can not be read from the buffer again. If you
 would rather see the character, but leave the index to head intact, you
-should use peek();
-
-5.5 - peekNextDigit() is called by the Stream class. It is overridden
-here to allow for a custom TIMEOUT value. The default value for the
-Stream class is to return 0. This makes distinguishing timeouts from
-true zero readings impossible. Therefore the default value has been
-set to -9999 in section 0 of the code. It is a public variable and
-can be changed dynamically within a program by calling:
-	mySDI12.TIMEOUT = (int) newValue
+should use peek(); 
 
 */
 
@@ -768,18 +760,6 @@ int SDI12::read()
   return nextChar;									 	// return the char
 }
 
-// 5.5 - this function is called by the Stream class when parsing digits
-int SDI12::peekNextDigit()
-{
-  int c;
-  while (1) {
-    c = timedPeek();
-    if (c < 0) return TIMEOUT; // timeout
-    if (c == '-') return c;
-    if (c >= '0' && c <= '9') return c;
-    read(); // discard non-numeric
-  }
-}
 
 /* ============= 6. Using more than one SDI-12 object.  ===================
 
